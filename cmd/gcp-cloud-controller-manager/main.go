@@ -35,27 +35,27 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	cloudprovider "k8s.io/cloud-provider"
+	nodecontroller "k8s.io/cloud-provider/controllers/node"
+	nodelifecyclecontroller "k8s.io/cloud-provider/controllers/nodelifecycle"
+	routecontroller "k8s.io/cloud-provider/controllers/route"
+	servicecontroller "k8s.io/cloud-provider/controllers/service"
+	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
+	"k8s.io/component-base/featuregate"
 	"k8s.io/component-base/logs"
 	_ "k8s.io/component-base/metrics/prometheus/clientgo" // for client metric registration
 	_ "k8s.io/component-base/metrics/prometheus/version"  // for version metric registration
 	"k8s.io/klog"
 	"k8s.io/kubernetes/cmd/cloud-controller-manager/app"
+	cloudcontrollerconfig "k8s.io/kubernetes/cmd/cloud-controller-manager/app/config"
 	"k8s.io/kubernetes/cmd/cloud-controller-manager/app/options"
 	"k8s.io/kubernetes/pkg/features" // add the kubernetes feature gates
-	utilflag "k8s.io/kubernetes/pkg/util/flag"
 	"k8s.io/legacy-cloud-providers/gce"
 	netutils "k8s.io/utils/net"
-
-	cloudprovider "k8s.io/cloud-provider"
-	cloudcontrollerconfig "k8s.io/kubernetes/cmd/cloud-controller-manager/app/config"
-	cloudcontrollers "k8s.io/kubernetes/pkg/controller/cloud"
-	routecontroller "k8s.io/kubernetes/pkg/controller/route"
-	servicecontroller "k8s.io/kubernetes/pkg/controller/service"
 )
 
 var version string
@@ -87,7 +87,7 @@ func main() {
 			cloudProviderFlag := cmd.Flags().Lookup("cloud-provider")
 			cloudProviderFlag.Value.Set(gce.ProviderName)
 
-			utilflag.PrintFlags(cmd.Flags())
+			cliflag.PrintFlags(cmd.Flags())
 
 			c, err := s.Config(KnownControllers(), ControllersDisabledByDefault.List())
 			if err != nil {
@@ -119,7 +119,7 @@ func main() {
 // initFunc is used to launch a particular controller.  It may run additional "should I activate checks".
 // Any error returned will cause the controller process to `Fatal`
 // The bool indicates whether the controller was enabled.
-type initFunc func(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, stop <-chan struct{}) (debuggingHandler http.Handler, enabled bool, err error)
+type initFunc func(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, featureGate featuregate.FeatureGate, stop <-chan struct{}) (debuggingHandler http.Handler, enabled bool, err error)
 
 // KnownControllers indicate the default controller we are known.
 func KnownControllers() []string {
@@ -141,9 +141,9 @@ func newControllerInitializers() map[string]initFunc {
 	return controllers
 }
 
-func startCloudNodeController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, stopCh <-chan struct{}) (http.Handler, bool, error) {
+func startCloudNodeController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, featureGate featuregate.FeatureGate, stopCh <-chan struct{}) (http.Handler, bool, error) {
 	// Start the CloudNodeController
-	nodeController, err := cloudcontrollers.NewCloudNodeController(
+	nodeController, err := nodecontroller.NewCloudNodeController(
 		ctx.SharedInformers.Core().V1().Nodes(),
 		// cloud node controller uses existing cluster role from node-controller
 		ctx.ClientBuilder.ClientOrDie("node-controller"),
@@ -160,9 +160,9 @@ func startCloudNodeController(ctx *cloudcontrollerconfig.CompletedConfig, cloud 
 	return nil, true, nil
 }
 
-func startCloudNodeLifecycleController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, stopCh <-chan struct{}) (http.Handler, bool, error) {
+func startCloudNodeLifecycleController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, featureGate featuregate.FeatureGate, stopCh <-chan struct{}) (http.Handler, bool, error) {
 	// Start the cloudNodeLifecycleController
-	cloudNodeLifecycleController, err := cloudcontrollers.NewCloudNodeLifecycleController(
+	cloudNodeLifecycleController, err := nodelifecyclecontroller.NewCloudNodeLifecycleController(
 		ctx.SharedInformers.Core().V1().Nodes(),
 		// cloud node lifecycle controller uses existing cluster role from node-controller
 		ctx.ClientBuilder.ClientOrDie("node-controller"),
@@ -179,7 +179,7 @@ func startCloudNodeLifecycleController(ctx *cloudcontrollerconfig.CompletedConfi
 	return nil, true, nil
 }
 
-func startServiceController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, stopCh <-chan struct{}) (http.Handler, bool, error) {
+func startServiceController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, featureGate featuregate.FeatureGate, stopCh <-chan struct{}) (http.Handler, bool, error) {
 	// Start the service controller
 	serviceController, err := servicecontroller.New(
 		cloud,
@@ -187,6 +187,7 @@ func startServiceController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cl
 		ctx.SharedInformers.Core().V1().Services(),
 		ctx.SharedInformers.Core().V1().Nodes(),
 		ctx.ComponentConfig.KubeCloudShared.ClusterName,
+		featureGate,
 	)
 	if err != nil {
 		// This error shouldn't fail. It lives like this as a legacy.
@@ -199,7 +200,7 @@ func startServiceController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cl
 	return nil, true, nil
 }
 
-func startRouteController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, stopCh <-chan struct{}) (http.Handler, bool, error) {
+func startRouteController(ctx *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, featureGate featuregate.FeatureGate, stopCh <-chan struct{}) (http.Handler, bool, error) {
 	if !ctx.ComponentConfig.KubeCloudShared.AllocateNodeCIDRs || !ctx.ComponentConfig.KubeCloudShared.ConfigureCloudRoutes {
 		klog.Infof("Will not configure cloud provider routes for allocate-node-cidrs: %v, configure-cloud-routes: %v.", ctx.ComponentConfig.KubeCloudShared.AllocateNodeCIDRs, ctx.ComponentConfig.KubeCloudShared.ConfigureCloudRoutes)
 		return nil, false, nil
