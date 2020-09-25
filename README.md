@@ -1,5 +1,7 @@
 # cloud-provider-gcp
 
+[![reuse compliant](https://reuse.software/badge/reuse-compliant.svg)](https://reuse.software/)
+
 ## Publishing gcp-controller-manager image
 
 This command will build and publish
