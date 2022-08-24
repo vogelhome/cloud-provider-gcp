@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install \
   ./...
 
 ############# cloud-provider-gcp #############
-FROM alpine:3.15.4 AS cloud-provider-gcp
+FROM gcr.io/distroless/static-debian11:nonroot AS cloud-provider-gcp
 
 COPY --from=builder /go/bin/gcp-cloud-controller-manager /gcp-cloud-controller-manager
 
