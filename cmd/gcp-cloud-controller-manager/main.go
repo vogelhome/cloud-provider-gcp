@@ -71,7 +71,7 @@ func main() {
 
 			cliflag.PrintFlags(cmd.Flags())
 
-			c, err := s.Config(controllerList, app.ControllersDisabledByDefault.List(), nil, nil)
+			c, err := s.Config(controllerList, app.ControllersDisabledByDefault.List(), nil, nil, nil)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
@@ -110,7 +110,7 @@ func main() {
 	}
 
 	fs := command.Flags()
-	namedFlagSets := s.Flags(controllerList, app.ControllersDisabledByDefault.List(), nil, nil)
+	namedFlagSets := s.Flags(controllerList, app.ControllersDisabledByDefault.List(), nil, nil, nil)
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), command.Name())
 
 	for _, f := range namedFlagSets.FlagSets {
